@@ -1,0 +1,146 @@
+# ==========================================
+#  Definitiion of the VisualCausalFlow model
+#  JUnlin 2026-04-20
+# ==========================================
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
+
+from config import Config
+
+class VisualCausalFlow(nn.Module):
+    def __init__(self, cfg=Config()):
+        """
+        Here we define a model that encodes 64x64 images into a latent space, predicts the next latent state given an action, and decodes back to images. 
+        The encoder can be a simple CNN or a more complex Dreamerv3-like architecture.
+        And the vector field network takes the current latent state and action to predict the change in latent state, which is crucial for planning in the latent space.
+        """
+        super().__init__()
+        self.latent_dim = cfg.ModelConfig.latent_dim
+        self.action_dim = cfg.ModelConfig.action_dim
+        self.encoder_type = cfg.ModelConfig.encoder_type
+        self.decoder_type = cfg.ModelConfig.encoder_type # Normally we want the decoder to mirror the encoder's architecture
+        # 1. Encoder
+        if self.encoder_type == "identity":
+            self.encoder = nn.Identity()  # which used for state input, not image
+        elif self.encoder_type == "simple":
+            self.encoder = nn.Sequential(
+                nn.Conv2d(1, 16, 4, stride=2, padding=1), nn.LeakyReLU(),
+                nn.Conv2d(16, 32, 4, stride=2, padding=1), nn.LeakyReLU(),
+                nn.Flatten(), nn.Linear(32 * 16 * 16, self.latent_dim)
+            )
+        elif self.encoder_type == "Dreamerv3":
+            self.encoder = nn.Sequential(
+                nn.Conv2d(1, 32, 4, stride=2), nn.ReLU(),    # 64x64 -> 31x31
+                nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),   # 31x31 -> 14x14
+                nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),  # 14x14 -> 6x6
+                nn.Conv2d(128, 256, 4, stride=2), nn.ReLU(), # 6x6 -> 2x2
+                nn.Flatten(),
+                nn.Linear(256 * 2 * 2, self.latent_dim)           # Final bottleneck
+            )
+        # 2. Vector Field Network
+        self.vf_net = nn.Sequential(
+            nn.Linear(self.latent_dim + self.action_dim, 128), nn.Tanh(),
+            # The input to the vector field network is the concatenation of the latent state and the action
+            nn.Linear(128, 128), nn.Tanh(),
+            nn.Linear(128, self.latent_dim)
+        )
+        # 3. Decoder
+        if self.encoder_type == "simple":
+            self.decoder = nn.Sequential(
+                nn.Linear(self.latent_dim, 32 * 16 * 16),
+                nn.Unflatten(1, (32, 16, 16)),
+                nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1), nn.LeakyReLU(),
+                nn.ConvTranspose2d(16, 1, 4, stride=2, padding=1), nn.Sigmoid()
+            )
+        elif self.encoder_type == "identity":
+            self.decoder = nn.Identity()  # which used for state input, not image
+
+        elif self.encoder_type == "Dreamerv3":
+            self.decoder = nn.Sequential(
+            # Start: Input is [Batch, latent_dim]
+            nn.Linear(self.latent_dim, 256 * 2 * 2),
+            nn.Unflatten(1, (256, 2, 2)),
+            nn.ConvTranspose2d(256, 128, 4, stride=2, padding=1), nn.ReLU(),
+            
+            nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1), nn.ReLU(),
+            nn.ConvTranspose2d(64, 32, 4, stride=2, padding=1), nn.ReLU(),
+            
+            nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1), nn.ReLU(),
+            nn.ConvTranspose2d(16, 1, 4, stride=2, padding=1), nn.Sigmoid()
+        )
+
+    def forward(self, obs, a):
+        """
+        obs:(batch_size,obs_dim)
+        a:(batch,action_dim)
+        """
+        z = self.encoder(obs)
+
+        dz = self.vf_net(torch.cat([z, a], dim=-1))
+        return z, z + dz
+    
+    def compute_loss(self, batch, lambda_dyn=1.0, lambda_laminar=1.0):
+        """
+        batch: Current A tuple which include (obs_t, a_t, obs_next)
+        # loss = a * −lnpϕ​(x∣z,h) + β * MSE(z_pred, z_gt)
+        # We minimize the in information content of the predicted image given the latent state (reconstruction loss) 
+        # Also ensure that the predicted next latent state is close to the ground truth next latent state (MSE loss).
+        """
+        obs_t, a_t, obs_next = batch
+        
+        # 1. Encode 2 images to latent space
+        z_t = self.encoder(obs_t)
+        z_next_real = self.encoder(obs_next).detach()
+        
+        # calculate the predicted next latent state
+        dz = self.vf_net(torch.cat([z_t, a_t], dim=-1))
+        z_next_pred = z_t + dz
+        
+        # 2. 基础损失：重构 + 动力学
+        if self.encoder_type != "identity":  # only compute reconstruction loss if we have a decoder (i.e., not for state input)
+            recon = self.decoder(z_next_pred)
+            recon_loss = nn.functional.binary_cross_entropy(recon, obs_next)
+            dyn_loss = nn.functional.mse_loss(z_next_pred, z_next_real)
+        else:
+            recon_loss = 0.0
+            dyn_loss = nn.functional.mse_loss(z_next_pred, z_next_real)
+        # 3. 硬核改进：Laminar Consistency (层流一致性)
+        laminar_loss = 0.0
+        # 总损失封装
+        total_loss = recon_loss + lambda_dyn * dyn_loss + lambda_laminar * laminar_loss
+        
+        return total_loss
+
+    def _adaptive_local_smooth_loss(self, z_t, a_t, dz, n_neighbors=8, eps=0.05):
+        """
+        Currently not used in the main loss, 
+        but you can call this function from compute_loss() to add an additional regularization term 
+        that encourages the vector field to be locally smooth around the training samples. 
+        This can help improve generalization and make the learned dynamics more robust to small perturbations in the latent space.
+        """
+        # 构造虚拟邻居
+        # z_t: [B, D] -> [B * n_neighbors, D]
+        batch_size = z_t.size(0)
+        z_t_rep = z_t.repeat_interleave(n_neighbors, dim=0)
+        a_t_rep = a_t.repeat_interleave(n_neighbors, dim=0)
+        
+        # 加上微小扰动
+        z_prime = z_t_rep + torch.randn_like(z_t_rep) * eps
+        
+        # 计算邻居的位移
+        dz_prime = self.vf_net(torch.cat([z_prime, a_t_rep], dim=-1))
+        
+        # 你的核心逻辑：计算相似度权重
+        # 距离越近，权重越高
+        dist_z = torch.norm(z_t_rep - z_prime, dim=-1)
+        weight = torch.exp(-dist_z) 
+        
+        # 预测位移的差异
+        dz_diff = torch.norm(dz.repeat_interleave(n_neighbors, dim=0) - dz_prime, dim=-1)
+        
+        # 加权损失
+        return torch.mean(weight * dz_diff)
+
+
