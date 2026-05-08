@@ -7,52 +7,69 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from config import Config
+
 
 class VisualCausalFlow(nn.Module):
-    def __init__(self, cfg=Config()):
+    def __init__(self, cfg):
         """
         Here we define a model that encodes 64x64 images into a latent space, predicts the next latent state given an action, and decodes back to images. 
         The encoder can be a simple CNN or a more complex Dreamerv3-like architecture.
         And the vector field network takes the current latent state and action to predict the change in latent state, which is crucial for planning in the latent space.
         """
         super().__init__()
+        self.cfg = cfg
+        self.obs_dim = cfg.ModelConfig.obs_dim
         self.latent_dim = cfg.ModelConfig.latent_dim
         self.action_dim = cfg.ModelConfig.action_dim
         self.encoder_type = cfg.ModelConfig.encoder_type
         self.decoder_type = cfg.ModelConfig.encoder_type # Normally we want the decoder to mirror the encoder's architecture
+        self.lambda_dyn = cfg.ModelConfig.lambda_dyn
+        self.lambda_laminar = cfg.ModelConfig.lambda_laminar
         # 1. Encoder
+        print(f"[Info] in_channel is {self.cfg.ModelConfig.in_channel}")
         if self.encoder_type == "identity":
             self.encoder = nn.Identity()  # which used for state input, not image
-        elif self.encoder_type == "simple":
+        elif self.encoder_type == "Conv":
             self.encoder = nn.Sequential(
-                nn.Conv2d(1, 16, 4, stride=2, padding=1), nn.LeakyReLU(),
+                nn.Conv2d(self.cfg.ModelConfig.in_channel, 16,4,stride=2, padding=1), nn.LeakyReLU(),
                 nn.Conv2d(16, 32, 4, stride=2, padding=1), nn.LeakyReLU(),
                 nn.Flatten(), nn.Linear(32 * 16 * 16, self.latent_dim)
             )
         elif self.encoder_type == "Dreamerv3":
             self.encoder = nn.Sequential(
-                nn.Conv2d(1, 32, 4, stride=2), nn.ReLU(),    # 64x64 -> 31x31
+                nn.Conv2d(self.cfg.ModelConfig.in_channel, 32, 4, stride=2), nn.ReLU(),    # 64x64 -> 31x31
                 nn.Conv2d(32, 64, 4, stride=2), nn.ReLU(),   # 31x31 -> 14x14
                 nn.Conv2d(64, 128, 4, stride=2), nn.ReLU(),  # 14x14 -> 6x6
                 nn.Conv2d(128, 256, 4, stride=2), nn.ReLU(), # 6x6 -> 2x2
                 nn.Flatten(),
                 nn.Linear(256 * 2 * 2, self.latent_dim)           # Final bottleneck
             )
-        # 2. Vector Field Network
+        elif self.encoder_type == "VAE":
+            raise NotImplementedError("VAE encoder is not implemented yet. Please choose 'simple' or 'Dreamerv3' or 'identity'.")
+        elif self.encoder_type == "MLP": # which is learned from dreamer v3 
+            self.encoder = nn.Sequential(
+                nn.Linear(self.obs_dim, 512),nn.LayerNorm(512), # It seems that to use LayerNorm
+                nn.SiLU(),
+                nn.Linear(512, 512),nn.LayerNorm(512),nn.SiLU(),
+                nn.Linear(512, 512),nn.LayerNorm(512),nn.SiLU(),
+                nn.Linear(512, self.latent_dim)
+            )
+        elif self.encoder_type == "RecurrentConv": #RNN only support for the conv now
+            pass
+        # 2. ======================= Vector Field Network =============================
         self.vf_net = nn.Sequential(
             nn.Linear(self.latent_dim + self.action_dim, 128), nn.Tanh(),
             # The input to the vector field network is the concatenation of the latent state and the action
             nn.Linear(128, 128), nn.Tanh(),
             nn.Linear(128, self.latent_dim)
         )
-        # 3. Decoder
-        if self.encoder_type == "simple":
+        # 3. ======================= Decoder  ==========================
+        if self.encoder_type == "Conv":
             self.decoder = nn.Sequential(
                 nn.Linear(self.latent_dim, 32 * 16 * 16),
                 nn.Unflatten(1, (32, 16, 16)),
                 nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1), nn.LeakyReLU(),
-                nn.ConvTranspose2d(16, 1, 4, stride=2, padding=1), nn.Sigmoid()
+                nn.ConvTranspose2d(16, self.cfg.ModelConfig.in_channel, 4, stride=2, padding=1), nn.Sigmoid()
             )
         elif self.encoder_type == "identity":
             self.decoder = nn.Identity()  # which used for state input, not image
@@ -68,8 +85,16 @@ class VisualCausalFlow(nn.Module):
             nn.ConvTranspose2d(64, 32, 4, stride=2, padding=1), nn.ReLU(),
             
             nn.ConvTranspose2d(32, 16, 4, stride=2, padding=1), nn.ReLU(),
-            nn.ConvTranspose2d(16, 1, 4, stride=2, padding=1), nn.Sigmoid()
+            nn.ConvTranspose2d(16, self.cfg.ModelConfig.in_channel, 4, stride=2, padding=1), nn.Sigmoid()
         )
+        elif self.encoder_type == "MLP":
+            self.decoder = nn.Sequential(
+                nn.Linear(self.latent_dim, 512),nn.LayerNorm(512), # It seems that to use LayerNorm
+                nn.SiLU(),
+                nn.Linear(512, 512),nn.LayerNorm(512),nn.SiLU(),
+                nn.Linear(512, 512),nn.LayerNorm(512),nn.SiLU(),
+                nn.Linear(512, self.obs_dim)
+            )
 
     def forward(self, obs, a):
         """
@@ -77,11 +102,14 @@ class VisualCausalFlow(nn.Module):
         a:(batch,action_dim)
         """
         z = self.encoder(obs)
+        if self.cfg.ModelConfig.latent_mode == "vector_field":
+            dz = self.vf_net(torch.cat([z, a], dim=-1))
+            return z, z + dz
+        else:
+            z_nxt = self.vf_net(torch.cat([z, a], dim=-1))
+            return z, z_nxt
 
-        dz = self.vf_net(torch.cat([z, a], dim=-1))
-        return z, z + dz
-    
-    def compute_loss(self, batch, lambda_dyn=1.0, lambda_laminar=1.0):
+    def compute_loss(self, batch):
         """
         batch: Current A tuple which include (obs_t, a_t, obs_next)
         # loss = a * −lnpϕ​(x∣z,h) + β * MSE(z_pred, z_gt)
@@ -93,10 +121,15 @@ class VisualCausalFlow(nn.Module):
         # 1. Encode 2 images to latent space
         z_t = self.encoder(obs_t)
         z_next_real = self.encoder(obs_next).detach()
-        
+        # print(f"[Info] The encoder type is {self.cfg.ModelConfig.encoder_type}")
+        # print(f"[Info] data shpe of z_t is {z_t.shape}")
         # calculate the predicted next latent state
-        dz = self.vf_net(torch.cat([z_t, a_t], dim=-1))
-        z_next_pred = z_t + dz
+        # print(f"[Info] Latent mode is {self.cfg.ModelConfig.latent_mode}")
+        if self.cfg.ModelConfig.latent_mode == "vector_field":
+            dz = self.vf_net(torch.cat([z_t, a_t], dim=-1))
+            z_next_pred = z_t + dz
+        else:
+            z_next_pred = self.vf_net(torch.cat([z_t, a_t], dim=-1))
         
         # 2. 基础损失：重构 + 动力学
         if self.encoder_type != "identity":  # only compute reconstruction loss if we have a decoder (i.e., not for state input)
@@ -109,7 +142,7 @@ class VisualCausalFlow(nn.Module):
         # 3. 硬核改进：Laminar Consistency (层流一致性)
         laminar_loss = 0.0
         # 总损失封装
-        total_loss = recon_loss + lambda_dyn * dyn_loss + lambda_laminar * laminar_loss
+        total_loss = recon_loss + self.lambda_dyn * dyn_loss + self.lambda_laminar * laminar_loss
         
         return total_loss
 
