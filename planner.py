@@ -1,6 +1,7 @@
 import torch
 import heapq
 import numpy as np
+from config import MetaWorldConfig
 
 class LatentPlanner:
     def __init__(self, model,cfg):
@@ -32,6 +33,10 @@ class LatentPlanner:
             with torch.no_grad():
                 z_start = self.model.encoder(start.unsqueeze(0)).squeeze(0)
                 z_goal = self.model.encoder(goal.unsqueeze(0)).squeeze(0)
+        elif isinstance(self.cfg,MetaWorldConfig) and self.cfg.ModelConfig.data_type=="state":
+            with torch.no_grad():
+                z_start = self.model.encoder(start)
+                z_goal = self.model.encoder(goal)
         else:
             z_start = start.squeeze()
             z_goal = goal.squeeze()
@@ -45,6 +50,7 @@ class LatentPlanner:
         
         print(f"\n[A* 诊断]: Start from {np.round(start_tuple, 2)} -> Goal {np.round(z_goal.numpy(), 2)}")
         print(f"[Info] Initial distance: {h(z_start):.4f}")
+        print(f"[Info] Current Encoder is {self.cfg.ModelConfig.encoder_type}")
 
         while pq and len(visited) < self.max_nodes:
             f, g, curr_z_tuple, z_path, a_path = heapq.heappop(pq)

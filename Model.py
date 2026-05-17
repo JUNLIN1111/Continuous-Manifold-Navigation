@@ -109,7 +109,63 @@ class VisualCausalFlow(nn.Module):
             z_nxt = self.vf_net(torch.cat([z, a], dim=-1))
             return z, z_nxt
 
-    def compute_loss(self, batch):
+    def compute_soft_rank(self, batch):
+        """
+        Compute the **mean effective (soft) rank** of the Jacobian ∂f/∂a over the batch.
+        batch: (obs_t, a_t, obs_next)
+        return: mean effective rank of the batch
+        """
+        obs_t, a_t, obs_next = batch
+        batch_size = obs_t.shape[0]
+
+        # 确保 a_t 可以求导
+        a_t = a_t.detach().requires_grad_(True)
+
+        # 前向：得到 z_{t+1} = f(z_t, a_t)
+        z_t = self.encoder(obs_t)
+        z_outcome = self.vf_net(torch.cat([z_t, a_t], dim=-1))
+
+        # 你的模型模式
+        if self.cfg.ModelConfig.latent_mode == "vector_field":
+            z_pre = z_outcome + z_t
+        else:
+            z_pre = z_outcome  # z_pre = z_{t+1}
+
+        # ===================== 逐个样本计算雅可比 ∂f/∂a =====================
+        eff_rank_list = []
+
+        for j in range(batch_size):
+            J_rows = []
+            for i in range(self.latent_dim):
+                # 求 ∂z_pre[j,i] / ∂a_t
+                grad = torch.autograd.grad(
+                    outputs=z_pre[j, i],
+                    inputs=a_t,
+                    retain_graph=True,
+                    create_graph=True
+                )[0]
+
+                # 取出第 j 个样本对应的梯度（a_t 是 batch 输入）
+                J_rows.append(grad[j:j+1])  # shape: [1, a_dim]
+
+            # 拼成 [latent_dim, a_dim] 的雅可比
+            J = torch.cat(J_rows, dim=0)
+
+            # 计算 effective rank (soft rank)
+            sigma = torch.linalg.svdvals(J)
+            sum_sigma = sigma.sum()
+            sum_sigma_sq = sigma.pow(2).sum()
+            eff_rank = sum_sigma ** 2 / (sum_sigma_sq + 1e-8)
+
+            eff_rank_list.append(eff_rank)
+
+        # ===================== 求 BATCH 均值 =====================
+        eff_rank_batch = torch.stack(eff_rank_list).mean()
+
+        return eff_rank_batch
+
+    
+    def compute_loss(self, batch,epoch):
         """
         batch: Current A tuple which include (obs_t, a_t, obs_next)
         # loss = a * −lnpϕ​(x∣z,h) + β * MSE(z_pred, z_gt)
@@ -132,8 +188,12 @@ class VisualCausalFlow(nn.Module):
             z_next_pred = self.vf_net(torch.cat([z_t, a_t], dim=-1))
         
         # 2. 基础损失：重构 + 动力学
-        if self.encoder_type != "identity":  # only compute reconstruction loss if we have a decoder (i.e., not for state input)
+        if self.encoder_type == "MLP":
             recon = self.decoder(z_next_pred)
+            recon_loss = nn.functional.mse_loss(recon, obs_next)
+            dyn_loss = nn.functional.mse_loss(z_next_pred, z_next_real)
+        elif self.encoder_type != "identity":  # only compute reconstruction loss if we have a decoder (i.e., not for state input)
+            recon = self.decoder(z_next_pred) # we only use bse loss when we have image to recon
             recon_loss = nn.functional.binary_cross_entropy(recon, obs_next)
             dyn_loss = nn.functional.mse_loss(z_next_pred, z_next_real)
         else:
@@ -142,6 +202,7 @@ class VisualCausalFlow(nn.Module):
         # 3. 硬核改进：Laminar Consistency (层流一致性)
         laminar_loss = 0.0
         # 总损失封装
+        if epoch % 200 == 0: print(f"Epoch {epoch} | recon_loss: {recon_loss:.4f} and the dyn_loss is {dyn_loss:.4f}")
         total_loss = recon_loss + self.lambda_dyn * dyn_loss + self.lambda_laminar * laminar_loss
         
         return total_loss

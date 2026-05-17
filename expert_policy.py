@@ -8,9 +8,8 @@ mt1 = metaworld.MT1('reach-v3')
 # 2. 拿到单任务 env
 env_cls = mt1.train_classes['reach-v3']
 env = env_cls()
-env.render_mode = 'rgb_array'
+env.render_mode = 'human'
 
-# 3. 必须设置 task（非常关键！）
 task = mt1.train_tasks[0]
 env.set_task(task)
 
@@ -24,9 +23,9 @@ step = 0
 while not done:
     a = policy.get_action(obs)
     obs, _, _, _, info = env.step(a)
-
-    img = env.render()
-    print(f"img is {img}")
+    # if step == 10:
+        # img = env.render()
+        # print(f"img is {img}")
     done = info['success'] == 1
     step += 1
     time.sleep(0.2)  # 添加适当的延时以便观察

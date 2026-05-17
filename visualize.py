@@ -33,7 +33,6 @@ class Visualizer:
             bounds = [torch.tensor(self.data_gen.render_frame(self.points[k])) for k in ["bound1", "bound2", "bound3", "bound4"]]
         if isinstance(self.cfg,MetaWorldConfig):
             bounds = self.integrate_bounds(self.cfg.VisualizerConfig.state_space_range[self.visualize_index_0],self.cfg.VisualizerConfig.state_space_range[self.visualize_index_0])
-            print(f"[Info] Please tell me the bounds:{bounds.shape}") 
         print(f"Find the encoder type here:{self.cfg.ModelConfig.encoder_type}")
         if isinstance(self.cfg,MetaWorldConfig):
             self.z_bounds = [torch.tensor(k).float().numpy() for k in bounds]
@@ -86,7 +85,7 @@ class Visualizer:
 
         X, Y = np.meshgrid(x_range, y_range)
         
-        z_grid = torch.zeros((res**2, self.cfg.ModelConfig.latent_dim))
+        z_grid = torch.zeros((res**2, self.cfg.ModelConfig.latent_dim)) 
         z_grid[:, self.visualize_index_0] = torch.from_numpy(X.flatten()).float()
         z_grid[:, self.visualize_index_1] = torch.from_numpy(Y.flatten()).float()
 
@@ -160,7 +159,7 @@ class Visualizer:
         
         z_path, a_path, z_s, z_g = p.planner_astar(s, g)
         # ---------------------------------------------------------
-        # 2. 综合看板：轨迹、向量场、重构检查、规划序列
+        # 2. Fig1 reconstruction and A* path
         # ---------------------------------------------------------
         fig1 = plt.figure(figsize=(18, 9))
         ax1 = fig1.add_subplot(2, 3, 1)
@@ -183,7 +182,6 @@ class Visualizer:
                 z_nxt = self.model.vf_net(torch.cat([z_grid, action.repeat(res**2, 1)], dim=-1))
                 dz = z_nxt - z_grid
 
-        # 向量场 + 轨迹绘制
         ax1.quiver(x, y, dz[:, self.visualize_index_0], dz[:, self.visualize_index_1], color='blue', alpha=0.2)
         p_np = np.array(z_path)
         ax1.plot(p_np[:, self.visualize_index_0], p_np[:, self.visualize_index_1], 'ro-', markersize=3, label='A* Path')
@@ -223,16 +221,16 @@ class Visualizer:
                 with torch.no_grad():
                     im = self.model.decoder(zv).numpy()
                 if self.cfg.ModelConfig.in_channel == 1:
-                    im = im.squeeze().numpy()
+                    im = im.squeeze()
                     ax.imshow(im, cmap='gray')
                 else:
                     im = im.squeeze(0).permute(1, 2, 0)
                     ax.imshow(im)
         fig1.savefig("Prediction_result", dpi=300, bbox_inches='tight')
         # ---------------------------------------------------------
-        # 3. 潜空间分布分析 (15x15 基础网格 + 100 sample points)
+        # 3. Latent distribution
         # ---------------------------------------------------------
-        # 1. 基础网格 (15x15)
+        # 1. Basic Network
         steps = 15
         visualize_1 = np.linspace(-self.column, self.column, steps)
         print(f"The value of colume:{self.column}")

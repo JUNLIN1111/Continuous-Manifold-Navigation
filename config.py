@@ -38,14 +38,14 @@ class AppleConfig:
         batch_size: int = 256
         encoder_type: str = "Dreamerv3"  # "Conv" or "Dreamerv3" or "identity"
         n_samples: int = 3000
-        data_type: str = "visual"
-        lambda_dyn: float = 1
+        data_type: str = "state"
+        lambda_dyn: float = 0
         lambda_laminar: float = 1
         latent_mode = "vector_field" if use_vector_field else "normal_dynamics"   
         whether_norm:bool = False
         # latent_mode: str = "direct_dynamics"
         # "vector_field" or "direct_dynamics"
-        render_mode = "RGB" # "Black" or "RGB"
+        render_mode = "Black" # "Black" or "RGB"
         in_channel:int = 1 if render_mode == "Black" else 3
 
     class VisualizerConfig:
@@ -129,7 +129,7 @@ class MetaWorldConfig:
         lambda_laminar: float = 1
         latent_mode = "vector_field"
         whether_norm:bool = False
-        obs_dim:int = 39 if data_type=="state" else None 
+        obs_dim:int = 39 
         queue_len:int = 4 # Dreamerv3 is 4? not sure
 
         in_channel:int = 3

@@ -1,4 +1,3 @@
-from Metaworld.metaworld.policies.sawyer_reach_v3_policy import SawyerReachV3Policy
 import gymnasium as gym
 import metaworld
 import numpy as np
@@ -39,20 +38,16 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--policy", type=str, default="random", help="Choose 'random' for random actions or 'expert' for expert policy actions")
 if __name__ == "__main__":
-    env = gym.make("Meta-World/MT1", env_name="reach-v3",render_mode="rgb_array" )
+    env = gym.make("Meta-World/MT1", env_name="reach-v3",render_mode="human" )
     observation, info = env.reset()
     args = parser.parse_args()
 
-    for t in range(1000):
+    for t in range(10000):
 
         action = env.action_space.sample()
         observation, reward, terminated, truncated, info = env.step(action)
-        time.sleep(0.2) 
-        # print(f"Observation: {observation}, Reward: {reward}, Terminated: {terminated}, Truncated: {truncated}")
-        # if t==500:
-        #     img = env.render()
-        #     print(f"image is {img}")
-        #     print(f"shape of image is {img.shape}")
+        # time.sleep(0.2) 
+
         goal_pos = observation[35:38]  # Assuming the goal position is at indices 35, 36, 37
 
         if truncated:

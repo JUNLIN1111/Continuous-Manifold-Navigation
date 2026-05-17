@@ -140,7 +140,7 @@ class MetaWorldDataGenerator:
 
         print(f"[Info]: MetaWorldDataGenerator initialized with config: {self.cfg}")     
         
-        self.env = gym.make("Meta-World/MT1", env_name="reach-v3")
+        self.env = gym.make("Meta-World/MT1", env_name="reach-v3",render_mode='rgb_array')
         observation, info = self.env.reset()
         print(f"[Info]: MetaWorld environment reset successful. Initial observation shape: {observation}")
     
@@ -149,15 +149,32 @@ class MetaWorldDataGenerator:
         What MetaWorld environment returns in the observation:
 
         """
-        observation, info = self.env.reset()
+        if self.cfg.ModelConfig.data_type == "state":
+            observation, info = self.env.reset() 
+        else:
+            observation, info = self.env.reset() 
+            img = self.env.render()
+            img = np.transpose(img, (2, 0, 1))
         fully_markov = self.cfg.ModelConfig.fully_markov
         print(f"debug self.cfg.ModelConfig.data_type: {self.cfg.ModelConfig.data_type}")
+        obs_t_list,obs_next_list,a_t_list = [],[],[]
+        
+        # ==================== Visual =======================
         if self.cfg.ModelConfig.data_type == "visual":
-            raise NotImplementedError("Visual data generation from MetaWorld environment is not implemented yet.")
-        else:
-            obs_t_list,obs_next_list,a_t_list = [],[],[]
             for t in range(self.cfg.ModelConfig.n_samples):
-            # for t in range(80):
+                action = self.env.action_space.sample()
+                obs_t_list.append(img)
+                a_t_list.append(action)
+                observation, reward, terminated, truncated, info = self.env.step(action)
+                img = self.env.render()
+                img = np.transpose(img, (2, 0, 1)) # there is no permute for numpy
+                obs_next_list.append(img)    
+                if terminated or truncated:
+                    observation, info = self.env.reset()            
+            self.env.close()
+        # ================= state ===========================
+        else:
+            for t in range(self.cfg.ModelConfig.n_samples):
                 action = self.env.action_space.sample()
                 obs_t_list.append(observation)
                 a_t_list.append(action)
@@ -193,10 +210,10 @@ class MetaWorldDataGenerator:
                 torch.from_numpy(obs_next_norm).float(),
                 torch.from_numpy(actions_norm).float())
             
-            print(f"[Info] shape of obs_t_list: {np.array(obs_t_list).shape}, shape of obs_next_list: {np.array(obs_next_list).shape}, shape of a_t_list: {np.array(a_t_list).shape}")
-            return (torch.from_numpy(np.array(obs_t_list)).float(),
-                    torch.from_numpy(np.array(obs_next_list)).float(),
-                    torch.from_numpy(np.array(a_t_list)).float())       
+        print(f"[Info] shape of obs_t_list: {np.array(obs_t_list).shape}, shape of obs_next_list: {np.array(obs_next_list).shape}, shape of a_t_list: {np.array(a_t_list).shape}")
+        return (torch.from_numpy(np.array(obs_t_list)).float(),
+                torch.from_numpy(np.array(obs_next_list)).float(),
+                torch.from_numpy(np.array(a_t_list)).float())       
     
     def render_frame(self,obs):
         """
