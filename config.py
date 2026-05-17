@@ -39,7 +39,7 @@ class AppleConfig:
         encoder_type: str = "Dreamerv3"  # "Conv" or "Dreamerv3" or "identity"
         n_samples: int = 3000
         data_type: str = "state"
-        lambda_dyn: float = 0
+        lambda_dyn: float = 1
         lambda_laminar: float = 1
         latent_mode = "vector_field" if use_vector_field else "normal_dynamics"   
         whether_norm:bool = False
@@ -47,6 +47,8 @@ class AppleConfig:
         # "vector_field" or "direct_dynamics"
         render_mode = "Black" # "Black" or "RGB"
         in_channel:int = 1 if render_mode == "Black" else 3
+        save_rank = False
+        
 
     class VisualizerConfig:
         def get_points():

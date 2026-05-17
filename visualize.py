@@ -23,6 +23,8 @@ class Visualizer:
         elif isinstance(self.cfg,MetaWorldConfig):
             self.visualize_index_0 = self.cfg.VisualizerConfig.visualize_index_0
             self.visualize_index_1 = self.cfg.VisualizerConfig.visualize_index_1
+            
+    # def visualize_mean_rank(self,rank_data_set):
 
     def build_bounds(self):
         """
@@ -136,7 +138,23 @@ class Visualizer:
         plt.tight_layout(rect=[0.03, 0.03, 1, 0.97]) # Add padding for global labels
         plt.show()
         fig.savefig("multi_action_fields.png", dpi=300, bbox_inches='tight')
+    
+    def visualize_eff_rank(self,store_loss,store_rank):
+        fig, ax = plt.subplots(2, 1, figsize=(6,8))
 
+        # ===== loss =====
+        ax[0].plot(store_loss)
+        ax[0].set_title("Loss")
+        ax[0].set_xlabel("Epoch")
+
+        # ===== rank =====
+        ax[1].plot(store_rank)
+        ax[1].set_title("Soft Rank")
+        ax[1].set_xlabel("Epoch")
+
+        plt.tight_layout()
+        plt.show()
+        
     def visualize_astar_distribution(self):
         p = LatentPlanner(self.model,cfg=self.cfg)
         self.model.eval()

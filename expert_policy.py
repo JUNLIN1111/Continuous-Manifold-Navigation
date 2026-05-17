@@ -28,7 +28,7 @@ while not done:
         # print(f"img is {img}")
     done = info['success'] == 1
     step += 1
-    time.sleep(0.2)  # 添加适当的延时以便观察
+    time.sleep(0.2)  
 env.close()
 print(f"Final observation: {obs}")
 print(f"Episode finished after {step} steps with success: {info['success']}")

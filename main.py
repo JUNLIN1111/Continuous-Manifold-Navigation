@@ -50,6 +50,7 @@ if __name__ == "__main__":
     else:
         optimizer = optim.Adam(model.parameters(), lr=1e-3)
         it, inxt, at = data_gen.generate_data()
+        store_rank = [];store_loss = []
         print(f"[INfo] shape of it is{it.shape}, and shpe of at is {at.shape}")
         print(f"[Info] The encoder type is{cfg.ModelConfig.encoder_type}")
         crit = nn.BCELoss()
@@ -58,9 +59,15 @@ if __name__ == "__main__":
             optimizer.zero_grad()
             idx = torch.randint(0, cfg.ModelConfig.n_samples, (cfg.ModelConfig.batch_size,))
             batch = (it[idx], at[idx], inxt[idx])
+            if cfg.ModelConfig.save_rank:
+                rank = model.compute_soft_rank(batch=batch).item()
+                store_rank.append(rank)
             loss = model.compute_loss(batch,epoch)
+            store_loss.append(loss.item())
             loss.backward(); optimizer.step() # backpropagation
         torch.save(model.state_dict(), "aclf_model.pth")
     if cfg.ModelConfig.latent_dim == 2:
         vis.visualize_astar_distribution()
         vis.visualize_multi_action_fields()
+    if cfg.ModelConfig.save_rank:
+        vis.visualize_eff_rank(store_loss=store_loss,store_rank=store_rank)
